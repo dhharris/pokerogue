@@ -6,11 +6,11 @@ import type { Unlockables } from "#app/system/unlockables";
 import { Abilities } from "#enums/abilities";
 import { Biome } from "#enums/biome";
 import type { EggTier } from "#enums/egg-type";
-import type { Moves } from "#enums/moves";
+import { Moves } from "#enums/moves";
 import type { MysteryEncounterTier } from "#enums/mystery-encounter-tier";
 import type { MysteryEncounterType } from "#enums/mystery-encounter-type";
 import { PokeballType } from "#enums/pokeball";
-import type { Species } from "#enums/species";
+import { Species } from "#enums/species";
 import { StatusEffect } from "#enums/status-effect";
 import type { TimeOfDay } from "#enums/time-of-day";
 import type { VariantTier } from "#enums/variant-tier";
@@ -114,7 +114,7 @@ class DefaultOverrides {
    * default is 0 to not override
    * @example SPECIES_OVERRIDE = Species.Bulbasaur;
    */
-  readonly STARTER_SPECIES_OVERRIDE: Species | number = 0;
+  readonly STARTER_SPECIES_OVERRIDE: Species | number = Species.SNORLAX;
   /**
    * This will force your starter to be a random fusion
    */
@@ -127,7 +127,7 @@ class DefaultOverrides {
   readonly PASSIVE_ABILITY_OVERRIDE: Abilities = Abilities.NONE;
   readonly STATUS_OVERRIDE: StatusEffect = StatusEffect.NONE;
   readonly GENDER_OVERRIDE: Gender | null = null;
-  readonly MOVESET_OVERRIDE: Moves | Array<Moves> = [];
+  readonly MOVESET_OVERRIDE: Moves | Array<Moves> = [ Moves.BIDE ];
   readonly SHINY_OVERRIDE: boolean | null = null;
   readonly VARIANT_OVERRIDE: Variant | null = null;
 

@@ -1,5 +1,5 @@
 import { ChargeAnim, initMoveAnim, loadMoveAnimAssets, MoveChargeAnim } from "./battle-anims";
-import { CommandedTag, EncoreTag, GulpMissileTag, HelpingHandTag, SemiInvulnerableTag, ShellTrapTag, StockpilingTag, SubstituteTag, TrappedTag, TypeBoostTag } from "./battler-tags";
+import { BideTag, CommandedTag, EncoreTag, GulpMissileTag, HelpingHandTag, SemiInvulnerableTag, ShellTrapTag, StockpilingTag, SubstituteTag, TrappedTag, TypeBoostTag } from "./battler-tags";
 import { getPokemonNameWithAffix } from "../messages";
 import type { AttackMoveResult, TurnMove } from "../field/pokemon";
 import type Pokemon from "../field/pokemon";
@@ -602,7 +602,7 @@ export default class Move implements Localizable {
 
   /**
    * Sets the {@linkcode MoveFlags.REDIRECT_COUNTER} flag for the calling Move
-   * @see {@linkcode Moves.METAL_BURST}
+   * @see {@linkcode Moves.METAL_BURST}, {@linkcode Moves.BIDE}
    * @returns The {@linkcode Move} that called this function
    */
   redirectCounter(): this {
@@ -1464,6 +1464,31 @@ export class CounterDamageAttr extends FixedDamageAttr {
     return (user, target, move) => !!user.turnData.attacksReceived.filter(ar => this.moveFilter(allMoves[ar.move])).length;
   }
 }
+
+// Similar concept as CounterDamageAttr, but gets the damage value from BideTag
+export class BideDamageAttr extends FixedDamageAttr {
+  constructor() {
+    super(0);
+  }
+
+  apply(user: Pokemon, target: Pokemon, move: Move, args: any[]): boolean {
+    const tag = user.getTag(BideTag);
+    const damage = tag ? tag.damage : 0;
+
+    (args[0] as Utils.IntegerHolder).value = Utils.toDmgValue(damage * 2, 0);
+
+    return true;
+  }
+
+  getCondition(): MoveConditionFunc {
+    const condition = (user, target, move) => {
+      const tag = user.getTag(BideTag);
+      return !(tag && tag.damage > 0);
+    };
+    return condition;
+  }
+}
+
 
 export class LevelDamageAttr extends FixedDamageAttr {
   constructor() {
@@ -5161,6 +5186,114 @@ export class BypassRedirectAttr extends MoveAttr {
   }
 }
 
+/**
+ * Base attribute for moves that lock-in the attacker for the specified turn duration
+ */
+export class UserLockedAttr extends MoveEffectAttr {
+  private turnCount: number;
+  private tagType: BattlerTagType;
+
+  constructor(turnCount: number, tagType: BattlerTagType) {
+    super(true, { trigger: MoveEffectTrigger.HIT, lastHitOnly: true });
+    this.turnCount = turnCount;
+    this.tagType = tagType;
+  }
+
+  canApply(user: Pokemon, target: Pokemon, move: Move, args: any[]) {
+    return !(this.selfTarget ? user : target).isFainted();
+  }
+
+  apply(user: Pokemon, target: Pokemon, move: Move, args: any[]): boolean {
+    if (!super.apply(user, target, move, args)) {
+      return false;
+    }
+
+    if (!user.getTag(this.tagType) && !user.getMoveQueue().length) {
+      new Array(this.turnCount).fill(null).map(() => user.getMoveQueue().push({ move: move.id, targets: [ target.getBattlerIndex() ], ignorePP: true }));
+      user.addTag(this.tagType, this.turnCount, move.id, user.id);
+    } else {
+      // applyMoveAttrs(AddBattlerTagAttr, user, target, move, args);
+      user.lapseTag(this.tagType); // if the associated tag is already in effect (moveQueue.length > 0), lapse the tag
+    }
+
+    return true;
+  }
+}
+
+export class BideAttr extends MoveEffectAttr {
+  constructor() {
+    super(true, { trigger: MoveEffectTrigger.PRE_APPLY/*, lastHitOnly: true*/ });
+  }
+
+  canApply(user: Pokemon, target: Pokemon, move: Move, args: any[]) {
+    return !(this.selfTarget ? user : target).isFainted();
+  }
+
+  // Second attempt: more or less copying frenzy to force the pokemon to use bide multiple turns in a row
+  apply(user: Pokemon, target: Pokemon, move: Move, args: any[]): boolean {
+    if (!super.apply(user, target, move, args)) {
+      return false;
+    }
+    const tag = user.getTag(BideTag);
+
+    if (!tag && !user.getMoveQueue().length) {
+      const turnCount = 2; // 2 charging 1 attack
+      new Array(turnCount).fill(null).map(() => user.getMoveQueue().push({ move: move.id, targets: [ target.getBattlerIndex() ], ignorePP: true }));
+      user.addTag(BattlerTagType.BIDE, turnCount, move.id, user.id);
+    } else {
+      applyMoveAttrs(AddBattlerTagAttr, user, target, move, args);
+      // The tag doesn't seem to be calling the "on hit"
+      user.lapseTag(BattlerTagType.BIDE);
+    }
+    return true;
+  }
+
+  // First attempt: doing everything from the attribute itself
+  applyOld(user: Pokemon, target: Pokemon, move: Move, args: any[]): boolean {
+    if (!super.apply(user, target, move, args)) {
+      return false;
+    }
+    const moveQueueLength = user.getMoveQueue().length;
+    const tag = user.getTag(BideTag);
+
+    if (!tag && moveQueueLength === 0) {
+      const turnCount = 3; // 2 charging 1 attack
+      new Array(turnCount).fill(null).map(() => user.getMoveQueue().push({ move: move.id, targets: [ target.getBattlerIndex() ], ignorePP: true }));
+      user.addTag(BattlerTagType.BIDE, turnCount, move.id, user.id);
+    } else if (tag && moveQueueLength > 1) {
+      globalScene.queueMessage(i18next.t("battlerTags:bideOnMove", { pokemonNameWithAffix: getPokemonNameWithAffix(user) }));
+      // No op essentially
+      applyMoveAttrs(MoveEffectAttr, user, user, move, args);
+      const damage = user.turnData.attacksReceived.filter(ar => allMoves[ar.move]).reduce((total: integer, ar: AttackMoveResult) => total + ar.damage, 0);
+      console.log("Recorded damage: %d", damage);
+      tag.damage += damage;
+      user.lapseTag(BattlerTagType.BIDE); // if the associated tag is already in effect (moveQueue.length > 0), lapse the tag
+    } else if (tag && moveQueueLength === 1) {
+      // Could perhaps use the logic in getMoveTargets, or use a VariableTargetAttr instead
+      let newTarget: Pokemon;
+      if (tag.lastAttacker && tag.lastAttacker.isActive()) {
+        newTarget = tag.lastAttacker;
+      } else {
+        // Select a new target at random
+        const opponents = user.getOpponents();
+        newTarget = opponents[user.randSeedInt(opponents.length)];
+      }
+      if (tag.damage > 0) {
+        globalScene.queueMessage(i18next.t("battlerTags:bideOnFinalMove", { pokemonNameWithAffix: getPokemonNameWithAffix(user) }));
+      } else {
+        globalScene.queueMessage(i18next.t("battle:attackFailed"));
+      }
+      // fingers crossed
+      args["damage"] = tag.damage;
+      applyMoveAttrs(FixedDamageAttr, user, newTarget, move, args);
+      // For the last turn we apply the attack. Then the tag is removed.
+      user.removeTag(BattlerTagType.BIDE);
+    }
+    return true;
+  }
+}
+// TODO: Make FrenzyAttr extend UserLockedAttr
+
 export class FrenzyAttr extends MoveEffectAttr {
   constructor() {
     super(true, { trigger: MoveEffectTrigger.HIT, lastHitOnly: true });
@@ -8558,9 +8691,12 @@ export function initMoves() {
       .target(MoveTarget.USER_SIDE),
     new SelfStatusMove(Moves.FOCUS_ENERGY, Type.NORMAL, -1, 30, -1, 0, 1)
       .attr(AddBattlerTagAttr, BattlerTagType.CRIT_BOOST, true, true),
-    new AttackMove(Moves.BIDE, Type.NORMAL, MoveCategory.PHYSICAL, -1, -1, 10, -1, 1, 1)
-      .target(MoveTarget.USER)
-      .unimplemented(),
+    new AttackMove(Moves.BIDE, Type.NORMAL, MoveCategory.PHYSICAL, -1, -1, 10, -1, -1, 1)
+      .attr(BideAttr)
+      .attr(BideDamageAttr)
+      .redirectCounter()
+      .makesContact(true)
+      .target(MoveTarget.ATTACKER),
     new SelfStatusMove(Moves.METRONOME, Type.NORMAL, -1, 10, -1, 0, 1)
       .attr(RandomMoveAttr, invalidMetronomeMoves),
     new StatusMove(Moves.MIRROR_MOVE, Type.FLYING, -1, 20, -1, 0, 1)

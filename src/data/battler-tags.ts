@@ -23,6 +23,7 @@ import { getStatusEffectHealText } from "#app/data/status-effect";
 import { TerrainType } from "#app/data/terrain";
 import { Type } from "#enums/type";
 import type Pokemon from "#app/field/pokemon";
+import type { AttackMoveResult } from "#app/field/pokemon";
 import { HitResult, MoveResult } from "#app/field/pokemon";
 import { getPokemonNameWithAffix } from "#app/messages";
 import { CommonAnimPhase } from "#app/phases/common-anim-phase";
@@ -2547,6 +2548,67 @@ export class AutotomizedTag extends BattlerTag {
 }
 
 /**
+ * Tag implementing the {@link https://bulbapedia.bulbagarden.net/wiki/Bide_(move)#Generations_V_to_VII | Bide } effect,
+ * for use with the move Bide. Pokemon with this tag record the value of damage received over two turns,
+ * Applied by moves:  {@linkcode Moves.BIDE | Bide (3 turns)}
+ * onto the tag.
+ */
+export class BideTag extends BattlerTag {
+  /** The damage received during Bide state */
+  public damage: number;
+  public lastAttacker?: Pokemon;
+
+  constructor(turnCount: number, sourceMove: Moves) {
+    super(BattlerTagType.BIDE, [ BattlerTagLapseType.MOVE, BattlerTagLapseType.HIT ], turnCount, sourceMove);
+  }
+
+  /** Sets the initial bide attributes */
+  onAdd(pokemon: Pokemon): void {
+    this.damage = 0;
+  }
+
+  // Called when the turns run out?
+  lapse(pokemon: Pokemon, lapseType: BattlerTagLapseType): boolean {
+    switch (lapseType) {
+      case BattlerTagLapseType.HIT:
+        this.onHit(pokemon);
+        break;
+      case BattlerTagLapseType.MOVE:
+        this.onMove(pokemon);
+        break;
+    }
+    return super.lapse(pokemon, lapseType);
+  }
+
+  onMove(pokemon: Pokemon): void {
+    globalScene.queueMessage(i18next.t("battlerTags:bideOnMove", { pokemonNameWithAffix: getPokemonNameWithAffix(pokemon) }));
+  }
+
+  /** We need to record which pokemon attacked us in order to decide who is damaged */
+  onHit(pokemon: Pokemon): void {
+    const moveEffectPhase = globalScene.getCurrentPhase();
+    if (moveEffectPhase instanceof MoveEffectPhase) {
+      const attacker = moveEffectPhase.getUserPokemon();
+      if (!attacker) {
+        return;
+      }
+      this.lastAttacker = attacker;
+    }
+    this.damage += pokemon.turnData.attacksReceived.filter(ar => allMoves[ar.move]).reduce((total: integer, ar: AttackMoveResult) => total + ar.damage, 0);
+  }
+
+  /**
+  * When given a battler tag or json representing one, load the data for it.
+  * @param {BattlerTag | any} source A battler tag
+  */
+  loadTag(source: BattlerTag | any): void {
+    super.loadTag(source);
+    this.damage = source.damage;
+    this.lastAttacker = source.lastAttacker;
+  }
+}
+
+/**
  * Tag implementing the {@link https://bulbapedia.bulbagarden.net/wiki/Substitute_(doll)#Effect | Substitute Doll} effect,
  * for use with the moves Substitute and Shed Tail. Pokemon with this tag deflect most forms of received attack damage
  * onto the tag. This tag also grants immunity to most Status moves and several move effects.
@@ -3150,6 +3212,8 @@ export function getBattlerTag(tagType: BattlerTagType, turnCount: number, source
       return new UnburdenTag();
     case BattlerTagType.SUBSTITUTE:
       return new SubstituteTag(sourceMove, sourceId);
+    case BattlerTagType.BIDE:
+      return new BideTag(turnCount, sourceMove);
     case BattlerTagType.AUTOTOMIZED:
       return new AutotomizedTag();
     case BattlerTagType.MYSTERY_ENCOUNTER_POST_SUMMON:
